@@ -168,12 +168,16 @@ cmd_update() {
         [ -z "$domain" ] && continue
         [[ "$domain" =~ ^# ]] && continue
 
+        # Jika user menulis wildcard seperti *.domain.com atau .domain.com, hapus prefix tersebut
+        domain=$(echo "$domain" | sed -e 's/^\*\.//' -e 's/^\.//')
+
         # Tambahkan rule iptables string match untuk TCP & UDP (DNS & Web/Raw TCP traffic)
         iptables -A "$CHAIN_NAME" -p tcp -m string --string "$domain" --algo bm -j DROP
         iptables -A "$CHAIN_NAME" -p udp -m string --string "$domain" --algo bm -j DROP
         echo "$domain" >> "$DOMAIN_CACHE"
         count=$((count + 1))
     done < "$tmp_file"
+
 
     rm -f "$tmp_file"
     date '+%Y-%m-%d %H:%M:%S' > "$CONF_DIR/last_update"

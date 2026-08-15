@@ -96,7 +96,7 @@ sudo jagoankode_sinkhole-iptables uninstall
 1. Buka file [`blockinglist.txt`](blockinglist.txt) di GitHub.
 2. Tambahkan domain baru (satu domain per baris), contoh:
    ```text
-   # Daftar Domain yang Diblokir
+   # Cukup tulis nama domain utama (otomatis memblokir seluruh sub-domain)
    hgsocket.com
    hxbdoor.one
    malware-c2-domain.com
@@ -104,6 +104,19 @@ sudo jagoankode_sinkhole-iptables uninstall
    ```
 3. Lakukan **Commit Changes** / Push ke branch `main`.
 4. Server Anda akan otomatis memperbarui aturan iptables pada jadwal cron berikutnya (setiap hari pk 03:00) atau Anda dapat menjalankan `sudo jagoankode_sinkhole-iptables update` di server untuk menerapkan langsung.
+
+---
+
+### 🌐 Bagaimana Cara Kerja Wildcard / Sub-Domain?
+
+Karena metode pemblokiran menggunakan pencarian teks (*substring matching*) di dalam paket data (`-m string --string "domain.com"`):
+
+- **Cukup tulis domain utamanya saja**: Menulis `hgsocket.com` akan **otomatis memblokir seluruh sub-domainnya**, seperti:
+  - `api.hgsocket.com` *(Terblokir)*
+  - `auth.login.hgsocket.com` *(Terblokir)*
+  - `cdn.sub.hgsocket.com` *(Terblokir)*
+- **Tidak perlu menambahkan tanda bintang `*`**: Script CLI sudah otomatis mengabaikan prefix `*.` jika Anda tidak sengaja menulis `*.hgsocket.com` di daftar blokir.
+
 
 ---
 
