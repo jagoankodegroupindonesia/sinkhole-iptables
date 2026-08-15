@@ -1,0 +1,3 @@
+# Satu domain per baris. Baris diawali # akan diabaikan.
+hgsocket.com
+hxbdoor.one
