@@ -1,0 +1,223 @@
+#!/bin/bash
+#
+# jagoankode_sinkhole-iptables
+# CLI untuk kelola domain-blocking via iptables string-match, sumber list dari raw GitHub.
+# JagoankodeCloud internal tool.
+#
+# Usage:
+#   jagoankode_sinkhole-iptables install <raw_github_url>
+#   jagoankode_sinkhole-iptables update
+#   jagoankode_sinkhole-iptables status
+#   jagoankode_sinkhole-iptables list
+#   jagoankode_sinkhole-iptables uninstall
+#
+
+set -e
+
+PROG_NAME="jagoankode_sinkhole-iptables"
+CHAIN_NAME="JAGOANKODE_SINKHOLE"
+CONF_DIR="/etc/jagoankode-sinkhole"
+CONFIG_FILE="$CONF_DIR/config"
+DOMAIN_CACHE="$CONF_DIR/domains.txt"
+LOG_FILE="/var/log/jagoankode-sinkhole.log"
+SELF_PATH="/usr/local/bin/$PROG_NAME"
+CRON_FILE="/etc/cron.d/jagoankode-sinkhole"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+need_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "Perintah ini harus dijalankan sebagai root (sudo)."
+        exit 1
+    fi
+}
+
+usage() {
+    cat <<EOF
+$PROG_NAME - domain sinkhole via iptables (JagoankodeCloud)
+
+Pemakaian:
+  $PROG_NAME install <raw_github_url>   Setup awal: simpan config, sync pertama, cron mingguan, hook CSF
+  $PROG_NAME update                     Paksa sync ulang dari raw URL sekarang juga
+  $PROG_NAME status                     Tampilkan status: aktif/tidak, jumlah domain, update terakhir
+  $PROG_NAME list                       Tampilkan daftar domain yang sedang diblokir
+  $PROG_NAME uninstall                  Hapus chain, cron, hook CSF, dan config
+
+Contoh:
+  sudo $PROG_NAME install https://raw.githubusercontent.com/kahfieidn/blocklist/main/domains.txt
+EOF
+}
+
+cmd_install() {
+    need_root
+    local raw_url="$1"
+    if [ -z "$raw_url" ]; then
+        echo "Error: raw URL wajib diisi."
+        echo "Contoh: sudo $PROG_NAME install https://raw.githubusercontent.com/user/repo/main/domains.txt"
+        exit 1
+    fi
+
+    mkdir -p "$CONF_DIR"
+    cat > "$CONFIG_FILE" <<EOF
+RAW_URL="$raw_url"
+CHAIN_NAME="$CHAIN_NAME"
+EOF
+    echo "Config disimpan di $CONFIG_FILE"
+
+    # Install diri sendiri ke /usr/local/bin kalau belum ada di sana
+    if [ "$(readlink -f "$0")" != "$SELF_PATH" ]; then
+        cp "$0" "$SELF_PATH"
+        chmod +x "$SELF_PATH"
+        echo "Command diinstal ke $SELF_PATH"
+    fi
+
+    # sync pertama kali
+    cmd_update
+
+    # setup cron mingguan (Minggu jam 03:00)
+    cat > "$CRON_FILE" <<EOF
+0 3 * * 0 root $SELF_PATH update >> $LOG_FILE 2>&1
+EOF
+    chmod 644 "$CRON_FILE"
+    echo "Cron mingguan dipasang di $CRON_FILE"
+
+    # hook ke CSF supaya rule ke-apply lagi setelah csf restart/reload
+    if [ -f /etc/csf/csfpost.sh ]; then
+        if ! grep -qF "$SELF_PATH" /etc/csf/csfpost.sh; then
+            {
+                echo ""
+                echo "# Re-apply jagoankode sinkhole chain setelah CSF restart/reload"
+                echo "$SELF_PATH update >> $LOG_FILE 2>&1"
+            } >> /etc/csf/csfpost.sh
+            chmod +x /etc/csf/csfpost.sh
+            echo "Hook ditambahkan ke /etc/csf/csfpost.sh"
+        fi
+    fi
+
+    echo ""
+    echo "Instalasi selesai. Coba: $PROG_NAME status"
+}
+
+cmd_update() {
+    need_root
+    mkdir -p "$CONF_DIR"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "Belum ada config. Jalankan '$PROG_NAME install <raw_url>' dulu."
+        exit 1
+    fi
+    source "$CONFIG_FILE"
+
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    log "Mulai update domain block list dari $RAW_URL"
+
+    if ! curl -fsSL --retry 3 --retry-delay 5 "$RAW_URL" -o "$tmp_file"; then
+        log "GAGAL download $RAW_URL - rules lama tetap dipakai."
+        rm -f "$tmp_file"
+        exit 1
+    fi
+
+    if [ ! -s "$tmp_file" ]; then
+        log "File domain list kosong/invalid, update dibatalkan."
+        rm -f "$tmp_file"
+        exit 1
+    fi
+
+    # bikin chain kalau belum ada
+    iptables -N "$CHAIN_NAME" 2>/dev/null || true
+    iptables -F "$CHAIN_NAME"
+
+    # pastikan OUTPUT & FORWARD jump ke chain kita (idempotent)
+    iptables -C OUTPUT -j "$CHAIN_NAME" 2>/dev/null || iptables -A OUTPUT -j "$CHAIN_NAME"
+    iptables -C FORWARD -j "$CHAIN_NAME" 2>/dev/null || iptables -A FORWARD -j "$CHAIN_NAME"
+
+    local count=0
+    > "$DOMAIN_CACHE"
+    while IFS= read -r domain || [ -n "$domain" ]; do
+        domain=$(echo "$domain" | tr -d '\r' | xargs)
+        [ -z "$domain" ] && continue
+        [[ "$domain" =~ ^# ]] && continue
+
+        iptables -A "$CHAIN_NAME" -p tcp -m string --string "$domain" --algo bm -j DROP
+        iptables -A "$CHAIN_NAME" -p udp -m string --string "$domain" --algo bm -j DROP
+        echo "$domain" >> "$DOMAIN_CACHE"
+        count=$((count+1))
+    done < "$tmp_file"
+
+    rm -f "$tmp_file"
+    date '+%Y-%m-%d %H:%M:%S' > "$CONF_DIR/last_update"
+    log "Selesai. $count domain diblokir via chain $CHAIN_NAME."
+
+    if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save >> "$LOG_FILE" 2>&1
+    fi
+}
+
+cmd_status() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "Belum terinstal. Jalankan: $PROG_NAME install <raw_url>"
+        exit 1
+    fi
+    source "$CONFIG_FILE"
+
+    echo "== $PROG_NAME status =="
+    echo "Raw URL       : $RAW_URL"
+    if iptables -L "$CHAIN_NAME" -n >/dev/null 2>&1; then
+        local rule_count
+        rule_count=$(iptables -L "$CHAIN_NAME" -n | tail -n +3 | wc -l)
+        echo "Chain         : $CHAIN_NAME (aktif, $rule_count rule)"
+    else
+        echo "Chain         : tidak ditemukan (belum sync / iptables reset)"
+    fi
+    if [ -f "$DOMAIN_CACHE" ]; then
+        echo "Jumlah domain : $(wc -l < "$DOMAIN_CACHE")"
+    fi
+    if [ -f "$CONF_DIR/last_update" ]; then
+        echo "Update terakhir: $(cat "$CONF_DIR/last_update")"
+    fi
+    if [ -f "$CRON_FILE" ]; then
+        echo "Cron          : terpasang ($CRON_FILE)"
+    else
+        echo "Cron          : tidak terpasang"
+    fi
+}
+
+cmd_list() {
+    if [ ! -f "$DOMAIN_CACHE" ]; then
+        echo "Belum ada data. Jalankan: $PROG_NAME update"
+        exit 1
+    fi
+    cat -n "$DOMAIN_CACHE"
+}
+
+cmd_uninstall() {
+    need_root
+    if iptables -L "$CHAIN_NAME" -n >/dev/null 2>&1; then
+        iptables -D OUTPUT -j "$CHAIN_NAME" 2>/dev/null || true
+        iptables -D FORWARD -j "$CHAIN_NAME" 2>/dev/null || true
+        iptables -F "$CHAIN_NAME"
+        iptables -X "$CHAIN_NAME"
+        echo "Chain $CHAIN_NAME dihapus."
+    fi
+    rm -f "$CRON_FILE"
+    rm -rf "$CONF_DIR"
+    if [ -f /etc/csf/csfpost.sh ]; then
+        sed -i "\|$SELF_PATH|d" /etc/csf/csfpost.sh
+        sed -i "/Re-apply jagoankode sinkhole/d" /etc/csf/csfpost.sh
+    fi
+    echo "Config, cron, dan hook CSF dibersihkan."
+    echo "Catatan: binary $SELF_PATH tidak dihapus otomatis, hapus manual kalau perlu:"
+    echo "  sudo rm $SELF_PATH"
+}
+
+case "$1" in
+    install)   shift; cmd_install "$@" ;;
+    update)    cmd_update ;;
+    status)    cmd_status ;;
+    list)      cmd_list ;;
+    uninstall) cmd_uninstall ;;
+    *)         usage ;;
+esac
