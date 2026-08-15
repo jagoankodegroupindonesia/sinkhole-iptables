@@ -26,18 +26,38 @@ Daftar domain terpusat di repository GitHub Anda (`blockinglist.txt`). Server ak
 
 ---
 
-## 📦 Cara Instalasi Cepat (One-Liner)
+## 📦 Cara Instalasi
 
-Jalankan perintah berikut di terminal server Anda:
+### Cara 1: One-Liner Stream (Rekomendasi)
+Jalankan langsung di server tanpa perlu menyimpan file installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jagoankodegroupindonesia/sinkhole-iptables/main/installer.sh | sudo bash
 ```
 
-> 💡 **Info**: Secara default, installer akan menggunakan daftar domain dari repo ini (`blockinglist.txt`). Jika ingin menggunakan URL raw blocklist kustom lainnya, jalankan:
+---
+
+### Cara 2: Download & Eksekusi Manual (Clean Download)
+Bersihkan file installer lama terlebih dahulu jika ada di server sebelum mengunduh yang baru:
+
+```bash
+rm -rf installer.sh
+curl -O https://raw.githubusercontent.com/jagoankodegroupindonesia/sinkhole-iptables/main/installer.sh
+sudo bash installer.sh
+```
+
+Atau dalam satu baris:
+```bash
+rm -rf installer.sh && curl -O https://raw.githubusercontent.com/jagoankodegroupindonesia/sinkhole-iptables/main/installer.sh && sudo bash installer.sh
+```
+
+---
+
+> 💡 **Custom Blocklist URL**: Jika ingin menggunakan URL raw blocklist kustom selain default:
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/jagoankodegroupindonesia/sinkhole-iptables/main/installer.sh | sudo bash -s -- https://raw.githubusercontent.com/username/repo/main/my-domains.txt
 > ```
+
 
 ---
 
