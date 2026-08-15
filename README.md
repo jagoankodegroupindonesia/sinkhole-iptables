@@ -36,16 +36,8 @@ curl -O https://raw.githubusercontent.com/jagoankodegroupindonesia/sinkhole-ipta
 sudo bash installer.sh
 ```
 
-> 💡 **Custom Blocklist URL**: Jika Anda ingin menggunakan URL raw blocklist selain default repo ini:
-> ```bash
-> rm -rf installer.sh
-> curl -O https://raw.githubusercontent.com/jagoankodegroupindonesia/sinkhole-iptables/main/installer.sh
-> sudo bash installer.sh https://raw.githubusercontent.com/username/repo/main/my-domains.txt
-> ```
-
-
-
 ---
+
 
 ## 🛠️ Penggunaan & Perintah CLI
 
